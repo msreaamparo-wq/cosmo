@@ -1,0 +1,51 @@
+name: cosmos
+description: "COSMOS: Your Memories, Your Little Universe. A child-friendly photo memory gallery."
+publish_to: "none"
+version: 1.0.0+1
+
+environment:
+  sdk: ">=3.3.0 <4.0.0"
+
+# Versions are left open (`any`) so `flutter pub get` picks releases that match YOUR Flutter SDK.
+# After the first successful `flutter pub get`, tighten them to ^x.y.z from pubspec.lock and commit it.
+# Two are bounded because the code targets their APIs: riverpod 2.x and share_plus 10.x.
+dependencies:
+  flutter:
+    sdk: flutter
+  flutter_riverpod: ^2.6.1
+  go_router: any
+  sqflite: any
+  sqflite_common_ffi_web: any
+  path: any
+  path_provider: any
+  uuid: any
+  image_picker: any
+  video_player: any
+  share_plus: ^10.1.0
+  exif: any
+  package_info_plus: any
+  supabase_flutter: any
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: any
+  sqflite_common_ffi: any
+
+flutter:
+  uses-material-design: true
+  # Fonts: download Fredoka and Nunito (SIL OFL) into assets/fonts, then uncomment.
+  # Without them the app runs with the system font (everything else is unchanged).
+  # fonts:
+  #   - family: Fredoka
+  #     fonts:
+  #       - asset: assets/fonts/Fredoka-Regular.ttf
+  #       - asset: assets/fonts/Fredoka-SemiBold.ttf
+  #         weight: 600
+  #   - family: Nunito
+  #     fonts:
+  #       - asset: assets/fonts/Nunito-Regular.ttf
+  #       - asset: assets/fonts/Nunito-SemiBold.ttf
+  #         weight: 600
+  #       - asset: assets/fonts/Nunito-Bold.ttf
+  #         weight: 700
