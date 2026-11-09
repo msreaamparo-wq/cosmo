@@ -343,7 +343,7 @@ class MediaRepository {
     return rows.map(MediaModel.fromMap).toList();
   }
 
-  /// Items with no cloud copy yet (candidates for an explicit parent-approved backup).
+  /// Items with no cloud copy yet (candidates for parent-approved automatic backup).
   Future<List<MediaModel>> notBackedUp({int? limit}) async {
     final db = await _local.database;
     final rows = await db.rawQuery(

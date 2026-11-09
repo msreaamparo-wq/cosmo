@@ -74,6 +74,9 @@ final dataVersionProvider = NotifierProvider<DataVersion, int>(DataVersion.new);
 void refreshUniverse(WidgetRef ref) {
   ref.read(dataVersionProvider.notifier).bump();
   ref.read(achievementServiceProvider).evaluate();
+  // If a parent has approved automatic cloud backup, queue the changed data and
+  // any new photo/video files without requiring a manual Sync now action.
+  unawaited(ref.read(syncControllerProvider.notifier).autoSyncAndBackup());
 }
 
 final albumsProvider = FutureProvider<List<AlbumModel>>((ref) {
@@ -98,9 +101,11 @@ class AppSettings {
     this.animationsEnabled = true,
     this.soundEnabled = false,
     this.cloudSyncEnabled = false,
+    this.cloudBackupOwnerId,
     this.theme = 'midnight',
   });
   final bool onboardingDone, animationsEnabled, soundEnabled, cloudSyncEnabled;
+  final String? cloudBackupOwnerId;
   final String theme; // midnight | nebula | aurora
 
   factory AppSettings.fromMap(Map<String, String> m) => AppSettings(
@@ -108,6 +113,7 @@ class AppSettings {
         animationsEnabled: m['animations_enabled'] != 'false',
         soundEnabled: m['sound_enabled'] == 'true',
         cloudSyncEnabled: m['cloud_sync_enabled'] == 'true',
+        cloudBackupOwnerId: m['cloud_backup_owner_id'],
         theme: m['theme'] ?? 'midnight',
       );
 
@@ -116,12 +122,14 @@ class AppSettings {
           bool? animationsEnabled,
           bool? soundEnabled,
           bool? cloudSyncEnabled,
+          String? cloudBackupOwnerId,
           String? theme}) =>
       AppSettings(
         onboardingDone: onboardingDone ?? this.onboardingDone,
         animationsEnabled: animationsEnabled ?? this.animationsEnabled,
         soundEnabled: soundEnabled ?? this.soundEnabled,
         cloudSyncEnabled: cloudSyncEnabled ?? this.cloudSyncEnabled,
+        cloudBackupOwnerId: cloudBackupOwnerId ?? this.cloudBackupOwnerId,
         theme: theme ?? this.theme,
       );
 }
@@ -146,6 +154,20 @@ class SettingsNotifier extends AsyncNotifier<AppSettings> {
       _write('sound_enabled', '$v', _cur.copyWith(soundEnabled: v));
   Future<void> setCloudSync(bool v) =>
       _write('cloud_sync_enabled', '$v', _cur.copyWith(cloudSyncEnabled: v));
+
+  /// Records the parent account that explicitly approved automatic metadata +
+  /// photo/video backup. Consent is tied to that account, not just this device.
+  Future<void> enableAutomaticBackup(String ownerId) async {
+    await ref
+        .read(settingsRepositoryProvider)
+        .set('cloud_backup_owner_id', ownerId);
+    await _write(
+      'cloud_sync_enabled',
+      'true',
+      _cur.copyWith(cloudSyncEnabled: true, cloudBackupOwnerId: ownerId),
+    );
+  }
+
   Future<void> setTheme(String v) =>
       _write('theme', v, _cur.copyWith(theme: v));
 
@@ -228,6 +250,8 @@ class SyncState {
 
 class SyncController extends Notifier<SyncState> {
   BackupToken? _token;
+  bool _automaticBackupRunning = false;
+  bool _automaticBackupQueued = false;
 
   @override
   SyncState build() => const SyncState();
@@ -235,18 +259,24 @@ class SyncController extends Notifier<SyncState> {
   SyncService get _svc => ref.read(syncServiceProvider);
 
   Future<void> refreshStatus() async {
-    final enabled = ref.read(settingsProvider).value?.cloudSyncEnabled ?? false;
+    final settings = ref.read(settingsProvider).value;
+    final enabled = settings?.cloudSyncEnabled ?? false;
+    final user = SupabaseService.client?.auth.currentUser;
     final pending = await _svc.pendingCount();
     if (!enabled) {
       state = state.copyWith(
           status: SyncStatus.disabled,
-          message: 'Cloud backup is off.',
+          message: 'Automatic cloud backup is not enabled.',
           pending: pending);
-    } else if (!SupabaseService.isReady ||
-        SupabaseService.client?.auth.currentUser == null) {
+    } else if (!SupabaseService.isReady || user == null) {
       state = state.copyWith(
           status: SyncStatus.signedOut,
           message: 'Sign in as a parent to sync.',
+          pending: pending);
+    } else if (settings?.cloudBackupOwnerId != user.id) {
+      state = state.copyWith(
+          status: SyncStatus.disabled,
+          message: 'Enable automatic backup for this parent account.',
           pending: pending);
     } else if (state.status != SyncStatus.syncing) {
       state = state.copyWith(
@@ -256,6 +286,45 @@ class SyncController extends Notifier<SyncState> {
             : 'Everything is up to date.',
         pending: pending,
       );
+    }
+  }
+
+  /// Sync metadata and upload every unbacked-up photo/video after the parent has
+  /// explicitly enabled automatic backup for the currently signed-in account.
+  /// Called at app startup and after local data changes.
+  Future<void> autoSyncAndBackup() async {
+    final settings = ref.read(settingsProvider).value;
+    final user = SupabaseService.client?.auth.currentUser;
+    if (settings?.cloudSyncEnabled != true ||
+        user == null ||
+        settings?.cloudBackupOwnerId != user.id) return;
+
+    if (_automaticBackupRunning || state.status == SyncStatus.syncing) {
+      _automaticBackupQueued = true;
+      return;
+    }
+
+    _automaticBackupRunning = true;
+    try {
+      await syncNow();
+      if (state.status != SyncStatus.synced) return;
+
+      final unbacked = await ref.read(mediaRepositoryProvider).notBackedUp();
+      if (unbacked.isNotEmpty) await backup();
+    } catch (_) {
+      state = state.copyWith(
+        status: SyncStatus.failed,
+        message:
+            'Automatic cloud backup could not finish. It will try again after your next change or app restart.',
+        clearProgress: true,
+      );
+    } finally {
+      _automaticBackupRunning = false;
+      if (_automaticBackupQueued) {
+        _automaticBackupQueued = false;
+        Future<void>.delayed(
+            const Duration(milliseconds: 350), autoSyncAndBackup);
+      }
     }
   }
 
@@ -284,6 +353,17 @@ class SyncController extends Notifier<SyncState> {
   /// Explicit, parent-approved photo backup. [ids] null = every photo not yet backed up.
   Future<BackupReport?> backup({List<String>? ids}) async {
     if (state.status == SyncStatus.syncing) return null;
+    final settings = ref.read(settingsProvider).value;
+    final user = SupabaseService.client?.auth.currentUser;
+    if (settings?.cloudSyncEnabled != true ||
+        user == null ||
+        settings?.cloudBackupOwnerId != user.id) {
+      state = state.copyWith(
+          status: SyncStatus.disabled,
+          message:
+              'A parent must enable automatic backup for this account first.');
+      return null;
+    }
     final media = ref.read(mediaRepositoryProvider);
     final items =
         ids == null ? await media.notBackedUp() : await media.byIds(ids);

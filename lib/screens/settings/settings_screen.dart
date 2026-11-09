@@ -25,10 +25,10 @@ STORED ON THIS DEVICE
 • Your original pictures in the device gallery are never changed or deleted.
 
 CLOUD BACKUP (OPTIONAL, PARENT ONLY)
-• Off unless a grown-up signs in and turns it on.
-• When on, COSMOS syncs: planet names, colors and descriptions, which pictures are on which planet, favorite marks, picture details (file name, type, date taken, size) and achievements.
-• Picture FILES are uploaded only when a grown-up taps "Back up photos now", and only the pictures not yet backed up. They go to a private storage area that only that parent account can open.
-• You can stop at any time. Removing a memory from COSMOS also removes its cloud backup copy the next time sync runs.
+• A parent must sign in and approve automatic backup once.
+• After approval, COSMOS automatically syncs planet names, colors and descriptions, which pictures are on which planet, favorite marks, picture details and achievements.
+• New photo and video files are automatically uploaded to that parent's private cloud storage after changes are made or the app starts while online.
+• A parent can pause automatic backup at any time. Removing a memory from COSMOS also removes its cloud backup copy the next time sync runs.
 
 WHAT COSMOS DOES NOT DO
 • No ads. No tracking or analytics. No location collection. No social features, messaging or public sharing.
@@ -424,43 +424,62 @@ class _CloudSection extends ConsumerWidget {
       ]);
     }
 
-    return frame([
-      if (user == null) ...[
-        Text('Sign in with a parent account to use cloud backup.',
+    if (user == null) {
+      return frame([
+        Text('Sign in with a parent account to use automatic cloud backup.',
             style: text.bodyLarge),
         const SizedBox(height: 12),
         CosmicButton(
             label: 'Sign in as parent',
             icon: Icons.login,
             onPressed: () => context.push(CosmosRoutes.parentAuth)),
-      ] else ...[
-        ListTile(
-            contentPadding: EdgeInsets.zero,
-            leading: const Icon(Icons.person_outline),
-            title: Text(user.email ?? 'Parent account'),
-            subtitle: const Text('Signed in')),
-        SwitchListTile(
+      ]);
+    }
+
+    final autoBackupEnabled =
+        settings.cloudSyncEnabled && settings.cloudBackupOwnerId == user.id;
+
+    Future<void> enableAutomaticBackup() async {
+      final ok = await confirmDialog(
+        context,
+        title: 'Enable automatic cloud backup?',
+        message:
+            'COSMOS will automatically sync planet details, favorites and picture details, and upload copies of photos and videos you add to this device to this parent account\'s private cloud storage after changes are made or the app starts while online. Uploads may use mobile data. You can pause automatic backup at any time.',
+        confirmLabel: 'Enable automatic backup',
+      );
+      if (!ok || !context.mounted) return;
+      await ref.read(settingsProvider.notifier).enableAutomaticBackup(user.id);
+      await ctl.refreshStatus();
+      await ctl.autoSyncAndBackup();
+    }
+
+    return frame([
+      ListTile(
           contentPadding: EdgeInsets.zero,
-          title: const Text('Cloud sync'),
-          subtitle: const Text(
-              'Syncs planets, favorites and picture details. Photo files upload only when you tap "Back up photos now".'),
-          value: settings.cloudSyncEnabled,
-          onChanged: (v) async {
-            if (v) {
-              final ok = await confirmDialog(
-                context,
-                title: 'Turn on cloud sync?',
-                message:
-                    'COSMOS will send planet names and colors, which pictures are on which planet, favorite marks, picture details and achievements to this parent account\'s private cloud storage. '
-                    'No photo files are uploaded unless you tap "Back up photos now".',
-                confirmLabel: 'Turn on',
-              );
-              if (!ok) return;
-            }
-            await ref.read(settingsProvider.notifier).setCloudSync(v);
-            await ctl.refreshStatus();
-            if (v) ctl.syncNow();
-          },
+          leading: const Icon(Icons.person_outline),
+          title: Text(user.email ?? 'Parent account'),
+          subtitle: const Text('Signed in')),
+      if (!autoBackupEnabled) ...[
+        Text(
+          'Automatic backup is not enabled for this parent account. Enable it once and COSMOS will sync changes and upload new photos/videos automatically after changes are made or the app starts while online.',
+          style: text.bodyLarge,
+        ),
+        const SizedBox(height: 12),
+        CosmicButton(
+          label: 'Enable automatic backup',
+          icon: Icons.cloud_upload_outlined,
+          color: CosmosColors.nebulaPink,
+          foreground: CosmosColors.deepSpaceNavy,
+          onPressed: enableAutomaticBackup,
+        ),
+      ] else ...[
+        const ListTile(
+          contentPadding: EdgeInsets.zero,
+          leading:
+              Icon(Icons.cloud_done_outlined, color: CosmosColors.starYellow),
+          title: Text('Automatic cloud backup is on'),
+          subtitle: Text(
+              'Changes and new photo/video files upload automatically after changes are made or the app starts while online. You do not need to press Sync now.'),
         ),
         const SizedBox(height: 4),
         const SyncStatusIndicator(),
@@ -480,89 +499,69 @@ class _CloudSection extends ConsumerWidget {
                   value: sync.progress,
                   minHeight: 8,
                   borderRadius: BorderRadius.circular(4))),
-        const SizedBox(height: 12),
-        Wrap(
-          spacing: 8,
-          runSpacing: 8,
-          children: [
-            CosmicButton(
-                label: 'Sync now',
-                icon: Icons.sync,
-                onPressed:
-                    settings.cloudSyncEnabled && !busy ? ctl.syncNow : null),
-            CosmicButton(
-              label: 'Back up photos now',
-              icon: Icons.cloud_upload_outlined,
-              color: CosmosColors.nebulaPink,
+        if (sync.failedBackupIds.isNotEmpty &&
+            sync.status != SyncStatus.syncing)
+          CosmicButton(
+              label: 'Retry failed uploads',
+              icon: Icons.refresh,
+              color: CosmosColors.starYellow,
               foreground: CosmosColors.deepSpaceNavy,
-              onPressed: settings.cloudSyncEnabled && !busy
-                  ? () async {
-                      final n = (await ref
-                              .read(mediaRepositoryProvider)
-                              .notBackedUp())
-                          .length;
-                      if (!context.mounted) return;
-                      if (n == 0) {
-                        toast(context, 'Everything is already backed up.');
-                        return;
-                      }
-                      final ok = await confirmDialog(
-                        context,
-                        title: 'Back up $n ${n == 1 ? 'photo' : 'photos'}?',
-                        message:
-                            'These pictures will be uploaded to this parent account\'s private cloud storage. Only that account can open them. You can remove a memory later and its backup copy is removed too.',
-                        confirmLabel: 'Back up',
-                      );
-                      if (ok) ctl.backup();
-                    }
-                  : null,
-            ),
-            if (busy && sync.progress != null)
-              CosmicButton(
-                  label: 'Stop',
-                  icon: Icons.stop,
-                  color: CosmosColors.coral,
-                  foreground: CosmosColors.deepSpaceNavy,
-                  onPressed: ctl.cancelBackup),
-            if (sync.failedBackupIds.isNotEmpty && !busy)
-              CosmicButton(
-                  label: 'Retry failed',
-                  icon: Icons.refresh,
-                  color: CosmosColors.starYellow,
-                  foreground: CosmosColors.deepSpaceNavy,
-                  onPressed: ctl.retryFailedBackup),
-            CosmicButton(
-              label: 'Restore from backup',
-              icon: Icons.cloud_download_outlined,
-              color: CosmosColors.midnightPurple,
-              onPressed: busy
-                  ? null
-                  : () async {
-                      final r =
-                          await ref.read(syncServiceProvider).restoreMissing();
-                      refreshUniverse(ref);
-                      if (context.mounted)
-                        toast(
-                            context,
-                            r.restored == 0 && r.failed == 0
-                                ? 'Nothing to restore.'
-                                : 'Restored ${r.restored}${r.failed > 0 ? ', ${r.failed} failed' : ''}.');
-                    },
-            ),
-            CosmicButton(
-              label: 'Sign out',
-              icon: Icons.logout,
-              color: CosmosColors.midnightPurple,
-              onPressed: busy
-                  ? null
-                  : () async {
-                      await ref.read(authServiceProvider).signOut();
-                      await ctl.refreshStatus();
-                    },
-            ),
-          ],
+              onPressed: ctl.retryFailedBackup),
+        TextButton.icon(
+          onPressed: busy
+              ? null
+              : () async {
+                  final ok = await confirmDialog(
+                    context,
+                    title: 'Pause automatic backup?',
+                    message:
+                        'New changes and photo/video files will stay on this device until automatic backup is enabled again.',
+                    confirmLabel: 'Pause backup',
+                  );
+                  if (!ok) return;
+                  await ref.read(settingsProvider.notifier).setCloudSync(false);
+                  await ctl.refreshStatus();
+                },
+          icon: const Icon(Icons.pause_circle_outline),
+          label: const Text('Pause automatic backup'),
         ),
       ],
+      const SizedBox(height: 8),
+      Wrap(
+        spacing: 8,
+        runSpacing: 8,
+        children: [
+          CosmicButton(
+            label: 'Restore from backup',
+            icon: Icons.cloud_download_outlined,
+            color: CosmosColors.midnightPurple,
+            onPressed: busy
+                ? null
+                : () async {
+                    final r =
+                        await ref.read(syncServiceProvider).restoreMissing();
+                    refreshUniverse(ref);
+                    if (context.mounted)
+                      toast(
+                          context,
+                          r.restored == 0 && r.failed == 0
+                              ? 'Nothing to restore.'
+                              : 'Restored ${r.restored}${r.failed > 0 ? ', ${r.failed} failed' : ''}.');
+                  },
+          ),
+          CosmicButton(
+            label: 'Sign out',
+            icon: Icons.logout,
+            color: CosmosColors.midnightPurple,
+            onPressed: busy
+                ? null
+                : () async {
+                    await ref.read(authServiceProvider).signOut();
+                    await ctl.refreshStatus();
+                  },
+          ),
+        ],
+      ),
     ]);
   }
 }

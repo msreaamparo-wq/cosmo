@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -81,7 +83,9 @@ class _ParentAuthScreenState extends ConsumerState<ParentAuthScreen> {
       _ok = r.ok;
     });
     if (r.ok && !_signUp && auth.currentUser != null) {
-      await ref.read(syncControllerProvider.notifier).refreshStatus();
+      final sync = ref.read(syncControllerProvider.notifier);
+      await sync.refreshStatus();
+      unawaited(sync.autoSyncAndBackup());
       if (mounted)
         context.canPop() ? context.pop() : context.go(CosmosRoutes.settings);
     }

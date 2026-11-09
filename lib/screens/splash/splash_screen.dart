@@ -45,10 +45,10 @@ class _SplashScreenState extends ConsumerState<SplashScreen>
       final settings = await ref.read(settingsProvider.future);
       await Future<void>.delayed(minimum);
       if (settings.cloudSyncEnabled) {
-        // Only if the parent turned cloud sync on. Never otherwise.
+        // Resume approved automatic metadata + photo backup at startup.
         final ctl = ref.read(syncControllerProvider.notifier);
         await ctl.refreshStatus();
-        unawaited(ctl.syncNow());
+        unawaited(ctl.autoSyncAndBackup());
       }
       if (!mounted) return;
       context.go(settings.onboardingDone

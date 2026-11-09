@@ -45,7 +45,7 @@ class BackupReport {
 ///  * Conflicts: last-writer-wins on the client `updated_at`. If the remote row is newer, it replaces
 ///    the local row and the local pending change is dropped; otherwise the local change is pushed.
 ///  * Deletions are soft (`deleted_at` tombstones) so other devices learn about them.
-///  * Photo FILES are uploaded only by [backup], which the parent starts explicitly.
+///  * Photo FILES are uploaded by [backup] after the parent has approved automatic cloud backup.
 class SyncService {
   SyncService(this._local, this._store, this._settings, this._media);
   final LocalDatabase _local;
@@ -382,8 +382,9 @@ class SyncService {
   String _marks(List<Object?> l) => List.filled(l.length, '?').join(',');
 
   // ------------------------------------------------------------------ backup
-  /// Uploads the given photos to the PRIVATE bucket at {user_id}/{media_id}/{filename}.
-  /// Called only from a parent-initiated action. A photo is marked backed-up ONLY after its upload succeeds.
+  /// Uploads the given media files to the PRIVATE bucket at {user_id}/{media_id}/{filename}.
+  /// The controller calls this only after the signed-in parent has approved automatic backup.
+  /// A file is marked backed-up ONLY after its upload succeeds.
   Future<BackupReport> backup(List<MediaModel> items,
       {BackupToken? token,
       void Function(int done, int total)? onProgress}) async {
